@@ -1,31 +1,37 @@
-# ─── Stage 1: build nfqws ────────────────────────────────────────────────────
+# ─── Stage 1: fetch & prepare zapret2 ──────────────────────────────────────────
 FROM debian:bookworm-slim AS builder
 
+ARG ZAPRET2_VER=v1.0.7
+ARG TARGETARCH
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        build-essential \
-        git \
+        curl \
         ca-certificates \
-        libnetfilter-queue-dev \
-        libcap-dev \
-        libnfnetlink-dev \
-        libmnl-dev \
-        zlib1g-dev \
+        tar \
     && rm -rf /var/lib/apt/lists/*
 
-RUN git clone --depth=1 https://github.com/bol-van/zapret.git /tmp/zapret \
-    && cd /tmp/zapret/nfq  && make nfqws && strip nfqws \
-    && cd /tmp/zapret/tpws && make tpws  && strip tpws \
-    && git clone --depth=1 https://github.com/Flowseal/zapret-discord-youtube.git /tmp/zapret-lists
+WORKDIR /tmp/zapret2
+RUN curl -sSL "https://github.com/bol-van/zapret2/releases/download/${ZAPRET2_VER}/zapret2-${ZAPRET2_VER}.tar.gz" -o zapret2.tar.gz \
+    && tar -xzf zapret2.tar.gz --strip-components=1 \
+    && mkdir -p /out/bin /out/lua /out/fake \
+    && cp -r lua/* /out/lua/ \
+    && cp -r files/fake/* /out/fake/ \
+    && case "$TARGETARCH" in \
+           "amd64") ARCH_DIR="linux-x86_64" ;; \
+           "arm64") ARCH_DIR="linux-arm64" ;; \
+           "arm")   ARCH_DIR="linux-arm" ;; \
+           *)       ARCH_DIR="linux-x86_64" ;; \
+       esac \
+    && cp binaries/${ARCH_DIR}/nfqws2 /out/bin/nfqws2 \
+    && chmod +x /out/bin/nfqws2
 
 # ─── Stage 2: runtime ─────────────────────────────────────────────────────────
 FROM debian:bookworm-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         iptables \
-        libnetfilter-queue1 \
-        libcap2 \
-        libnfnetlink0 \
         ipset \
+        procps \
         ffmpeg \
         curl \
         ca-certificates \
@@ -33,36 +39,27 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         python3-pip \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=builder /tmp/zapret/nfq/nfqws  /usr/local/bin/nfqws
-COPY --from=builder /tmp/zapret/tpws/tpws  /usr/local/bin/tpws
-RUN chmod +x /usr/local/bin/nfqws /usr/local/bin/tpws
-
-# Используем legacy-backend: nf_tables может отсутствовать в ядре хоста
+# Используем legacy-backend: nf_tables может отсутствовать или конфликтовать в контейнерах
 RUN update-alternatives --set iptables  /usr/sbin/iptables-legacy \
     && update-alternatives --set ip6tables /usr/sbin/ip6tables-legacy
 
-# ─── yt-dlp (via pip, works on all architectures) ─────────────────────────────
+# Копируем zapret2 компоненты
+COPY --from=builder /out/bin/nfqws2 /usr/local/bin/nfqws2
+COPY --from=builder /out/lua/      /opt/zapret2/lua/
+COPY --from=builder /out/fake/     /opt/zapret2/fake/
+
+# Устанавливаем yt-dlp
 RUN pip3 install --no-cache-dir --break-system-packages yt-dlp
 
 VOLUME ["/downloads"]
 
-# ─── Assets from zapret-discord-youtube (cloned in builder) ──────────────────
-COPY --from=builder /tmp/zapret-lists/bin/*.bin        /opt/zapret/bin/
-COPY --from=builder /tmp/zapret-lists/lists/           /opt/zapret/lists/
-COPY --from=builder /tmp/zapret-lists/.service/ipset-service.txt /opt/zapret/lists/ipset-all.txt
-
-# Empty user-override lists (required so nfqws doesn't error on missing files)
-RUN touch /opt/zapret/lists/list-general-user.txt \
-          /opt/zapret/lists/list-exclude-user.txt \
-          /opt/zapret/lists/ipset-exclude-user.txt
-
 COPY entrypoint.sh /entrypoint.sh
 COPY server.py     /app/server.py
-RUN chmod +x /entrypoint.sh
+RUN chmod +x /entrypoint.sh /usr/local/bin/nfqws2
 
-ENV NFQUEUE_NUM=200
-ENV TPWS_PORT=18080
-ENV SERVER_PORT=8080
-ENV TPWS_OPTS="--split-pos=1 --oob=tls"
+ENV NFQUEUE_NUM=200 \
+    SERVER_PORT=8080 \
+    OUTPUT_DIR=/downloads \
+    NFQWS2_OPT="--lua-desync=multidisorder:pos=1,midsld"
 
 ENTRYPOINT ["/entrypoint.sh"]

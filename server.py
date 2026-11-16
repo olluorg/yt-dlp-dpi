@@ -20,7 +20,6 @@ import tempfile
 import urllib.parse
 import uuid
 
-TPWS_PORT   = int(os.environ.get("TPWS_PORT",   "1080"))
 SERVER_PORT = int(os.environ.get("SERVER_PORT", "8080"))
 COOKIES_FILE = os.environ.get("COOKIES_FILE", "/cookies.txt")
 
@@ -56,10 +55,12 @@ HTML = """\
 def yt_dlp_base_cmd():
     cmd = [
         "yt-dlp",
-        "--proxy", f"socks5://127.0.0.1:{TPWS_PORT}",
         "--no-playlist",
         "--no-warnings",
     ]
+    proxy = os.environ.get("PROXY_URL") or os.environ.get("HTTP_PROXY")
+    if proxy:
+        cmd += ["--proxy", proxy]
     if os.path.isfile(COOKIES_FILE):
         cmd += ["--cookies", COOKIES_FILE]
     return cmd

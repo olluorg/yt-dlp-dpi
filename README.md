@@ -1,8 +1,8 @@
-# YouTube Downloader (Docker)
+# YouTube Downloader (Docker + zapret2)
 
-Инструмент для скачивания видео и аудио с YouTube из России.
+Инструмент для стабильного скачивания видео и аудио с YouTube из России без сторонних VPN.
 
-Внутри работает [yt-dlp](https://github.com/yt-dlp/yt-dlp) в связке с [zapret/tpws](https://github.com/bol-van/zapret) для стабильного соединения с серверами YouTube.
+Внутри работает [yt-dlp](https://github.com/yt-dlp/yt-dlp) в связке с [bol-van/zapret2](https://github.com/bol-van/zapret2) (`nfqws2`) с динамической десинхронизацией пакетов на Lua.
 
 [English version →](README.en.md)
 
@@ -11,7 +11,7 @@
 ### Веб-интерфейс
 
 ```bash
-docker compose up
+docker compose up -d
 ```
 
 Открыть в браузере: `http://localhost:8080`
@@ -20,24 +20,18 @@ docker compose up
 
 ### Командная строка
 
-**Linux / Raspberry Pi:**
+**Linux / WSL2 (Windows):**
 ```bash
-# Видео (MP4)
-docker run --rm --network=host -v "${PWD}/downloads:/downloads" ghcr.io/olluorg/yt-dlp-dpi:latest "https://youtu.be/aqz-KE-bpKQ"
+# Скачать видео (MP4)
+docker run --rm --cap-add=NET_ADMIN -v "${PWD}/downloads:/downloads" ghcr.io/olluorg/yt-dlp-dpi:latest "https://youtu.be/aqz-KE-bpKQ"
 
-# Аудио (MP3)
-docker run --rm --network=host -v "${PWD}/downloads:/downloads" -e YT_DLP_OPTS="-x --audio-format mp3" ghcr.io/olluorg/yt-dlp-dpi:latest "https://youtu.be/aqz-KE-bpKQ"
+# Скачать аудио (MP3)
+docker run --rm --cap-add=NET_ADMIN -v "${PWD}/downloads:/downloads" -e YT_DLP_OPTS="-x --audio-format mp3" ghcr.io/olluorg/yt-dlp-dpi:latest "https://youtu.be/aqz-KE-bpKQ"
 ```
 
-**Windows (WSL2):**
+**macOS / Зарубежные серверы (без DPI bypass):**
 ```bash
-docker run --rm --network=host -v "${PWD}/downloads:/downloads" ghcr.io/olluorg/yt-dlp-dpi:latest "https://youtu.be/aqz-KE-bpKQ"
-```
-
-**macOS:**
-```bash
-# На macOS не нужен DPI bypass — отключаем TPWS_OPTS
-docker run --rm --network=host -v "${PWD}/downloads:/downloads" -e TPWS_OPTS="" ghcr.io/olluorg/yt-dlp-dpi:latest "https://youtu.be/aqz-KE-bpKQ"
+docker run --rm -v "${PWD}/downloads:/downloads" ghcr.io/olluorg/yt-dlp-dpi:latest "https://youtu.be/aqz-KE-bpKQ"
 ```
 
 Файлы сохраняются в папку `./downloads/`.
@@ -48,15 +42,13 @@ docker run --rm --network=host -v "${PWD}/downloads:/downloads" -e TPWS_OPTS="" 
 docker pull ghcr.io/olluorg/yt-dlp-dpi:latest
 ```
 
-Образ автоматически пересобирается при каждом обновлении репозитория.
+Образ автоматически пересобирается через CI/CD при каждом обновлении репозитория.
 
 ## Сборка вручную
 
 ```bash
 docker build -t yt-dlp-dpi .
 ```
-
-Всё необходимое скачивается автоматически во время сборки.
 
 ## REST API
 
@@ -66,50 +58,23 @@ docker build -t yt-dlp-dpi .
 ---
 
 ### `GET /info`
-
 Возвращает метаданные видео без скачивания.
 
-**Параметры:** `url` (обязательный)
-
+**Параметры:** `url` (обязательный)  
 **Пример:** `GET /info?url=https://youtu.be/aqz-KE-bpKQ`
-
-**Ответ `200`:**
-```json
-{
-  "title": "Rick Astley - Never Gonna Give You Up",
-  "duration": 213,
-  "uploader": "Rick Astley",
-  "thumbnail": "https://..."
-}
-```
 
 ---
 
 ### `GET /search`
-
 Ищет видео на YouTube и возвращает первый результат.
 
-**Параметры:** `query` (обязательный)
-
-**Пример:** `GET /search?query=never+gonna+give+you+up`
-
-**Ответ `200`:**
-```json
-{
-  "url": "https://www.youtube.com/watch?v=aqz-KE-bpKQ",
-  "title": "Rick Astley - Never Gonna Give You Up",
-  "duration": 213,
-  "uploader": "Rick Astley"
-}
-```
+**Параметры:** `query` (обязательный)  
+**Пример:** `GET /search?query=rick+astley`
 
 ---
 
 ### `GET /download`
-
 Скачивает видео или аудио и отдаёт файл напрямую в ответе.
-
-**Параметры запроса:**
 
 | Параметр | Обязательный | Значения | По умолчанию | Описание |
 |---|---|---|---|---|
@@ -118,36 +83,13 @@ docker build -t yt-dlp-dpi .
 | `start` | нет | `HH:MM:SS` | — | Начало обрезки |
 | `end` | нет | `HH:MM:SS` | — | Конец обрезки |
 
-**Примеры:**
-
-```
-GET /download?url=https://youtu.be/aqz-KE-bpKQ
-GET /download?url=https://youtu.be/aqz-KE-bpKQ&format=mp3
-GET /download?url=https://youtu.be/aqz-KE-bpKQ&start=00:01:00&end=00:02:30
-```
-
-**Ответы:**
-
-| Код | Описание |
-|---|---|
-| `200` | Файл в теле ответа (`Content-Disposition: attachment`) |
-| `400` | Не передан параметр `url` |
-| `500` | Ошибка скачивания |
-
-**Заголовки ответа при успехе:**
-```
-Content-Type: video/mp4  |  audio/mpeg
-Content-Disposition: attachment; filename="<название видео>.<ext>"
-Content-Length: <размер в байтах>
-```
-
 ## Переменные окружения
 
 | Переменная | По умолчанию | Описание |
 |---|---|---|
 | `SERVER_PORT` | `8080` | Порт веб-интерфейса |
-| `TPWS_PORT` | `18080` | Порт внутреннего SOCKS5-прокси |
-| `TPWS_OPTS` | `--split-pos=1 --oob=tls` | Опции DPI bypass. Для macOS/зарубежных серверов: `""` |
+| `NFQUEUE_NUM` | `200` | Номер очереди NFQUEUE |
+| `NFQWS2_OPT` | `--lua-desync=multidisorder:pos=1,midsld` | Параметры десинхронизации zapret2 |
 | `OUTPUT_DIR` | `/downloads` | Папка для сохранения файлов |
 | `COOKIES_FILE` | `/cookies.txt` | Путь к файлу cookies внутри контейнера |
 | `YT_DLP_OPTS` | — | Дополнительные флаги yt-dlp |
@@ -156,14 +98,8 @@ Content-Length: <размер в байтах>
 
 YouTube может требовать авторизацию. Экспортируйте cookies из браузера и передайте их в контейнер:
 
-1. Установите расширение [Get cookies.txt LOCALLY](https://chromewebstore.google.com/detail/get-cookiestxt-locally/cclelndahbckbenkjhflpdbgdldlbecc) для Chrome или [cookies.txt](https://addons.mozilla.org/en-US/firefox/addon/cookies-txt/) для Firefox
-2. Откройте youtube.com, войдите в аккаунт
-3. Экспортируйте cookies в файл `cookies.txt`
-4. Передайте файл при запуске:
-
 ```bash
-# Командная строка
-docker run --rm --network=host -v "${PWD}/downloads:/downloads" -v "${PWD}/cookies.txt:/cookies.txt:ro" ghcr.io/olluorg/yt-dlp-dpi:latest "https://youtu.be/aqz-KE-bpKQ"
+docker run --rm --cap-add=NET_ADMIN -v "${PWD}/downloads:/downloads" -v "${PWD}/cookies.txt:/cookies.txt:ro" ghcr.io/olluorg/yt-dlp-dpi:latest "https://youtu.be/aqz-KE-bpKQ"
 ```
 
 Для веб-интерфейса добавьте в `docker-compose.yml`:
@@ -175,10 +111,9 @@ volumes:
 ## Требования
 
 - Docker
-- Linux-хост или WSL2
+- `--cap-add=NET_ADMIN` (или `--privileged`) для работы модуля перехвата очередей NFQUEUE.
 
 ## Основано на
 
-- [bol-van/zapret](https://github.com/bol-van/zapret)
-- [Flowseal/zapret-discord-youtube](https://github.com/Flowseal/zapret-discord-youtube)
+- [bol-van/zapret2](https://github.com/bol-van/zapret2)
 - [yt-dlp/yt-dlp](https://github.com/yt-dlp/yt-dlp)

@@ -1,21 +1,21 @@
 services:
   zapret:
+    build: .
     image: ghcr.io/olluorg/yt-dlp-dpi:latest
-    container_name: zapret
+    container_name: yt-dlp-dpi
 
     cap_add:
       - NET_ADMIN
       - NET_RAW
 
     network_mode: host
-
     restart: unless-stopped
 
     environment:
       - NFQUEUE_NUM=200
-      - TPWS_PORT=1080
       - SERVER_PORT=8080
+      - NFQWS2_OPT=--lua-desync=multidisorder:pos=1,midsld
 
-    # Для монтирования собственных списков без пересборки:
-    # volumes:
-    #   - ./my-lists/list-general-user.txt:/opt/zapret/lists/list-general-user.txt:ro
+    volumes:
+      - ./downloads:/downloads
+      # - ./cookies.txt:/cookies.txt:ro
