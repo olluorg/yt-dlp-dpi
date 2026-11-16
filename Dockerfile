@@ -1,3 +1,8 @@
+ARG DENO_VERSION=2.5.6
+
+# ─── Stage 0: Deno runtime binary for JS challenge solving ────────────────────
+FROM denoland/deno:bin-${DENO_VERSION} AS deno
+
 # ─── Stage 1: fetch & prepare zapret2 ──────────────────────────────────────────
 FROM debian:bookworm-slim AS builder
 
@@ -16,7 +21,16 @@ RUN curl -sSL "https://github.com/bol-van/zapret2/releases/download/${ZAPRET2_VE
     && mkdir -p /out/bin /out/lua /out/fake \
     && cp -r lua/* /out/lua/ \
     && cp -r files/fake/* /out/fake/ \
-    && case "$TARGETARCH" in \
+    && ARCH="${TARGETARCH:-}"; \
+       if [ -z "$ARCH" ]; then \
+           case "$(uname -m)" in \
+               x86_64) ARCH="amd64" ;; \
+               aarch64) ARCH="arm64" ;; \
+               armv7l) ARCH="arm" ;; \
+               *) ARCH="amd64" ;; \
+           esac; \
+       fi; \
+       case "$ARCH" in \
            "amd64") ARCH_DIR="linux-x86_64" ;; \
            "arm64") ARCH_DIR="linux-arm64" ;; \
            "arm")   ARCH_DIR="linux-arm" ;; \
@@ -43,23 +57,28 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN update-alternatives --set iptables  /usr/sbin/iptables-legacy \
     && update-alternatives --set ip6tables /usr/sbin/ip6tables-legacy
 
+# Копируем deno для решения JS challenge в yt-dlp
+COPY --from=deno /deno /usr/local/bin/deno
+
 # Копируем zapret2 компоненты
 COPY --from=builder /out/bin/nfqws2 /usr/local/bin/nfqws2
 COPY --from=builder /out/lua/      /opt/zapret2/lua/
 COPY --from=builder /out/fake/     /opt/zapret2/fake/
 
-# Устанавливаем yt-dlp
-RUN pip3 install --no-cache-dir --break-system-packages yt-dlp
+# Устанавливаем yt-dlp с рекомендованными зависимостями
+RUN pip3 install --no-cache-dir --break-system-packages "yt-dlp[default]"
 
+WORKDIR /downloads
 VOLUME ["/downloads"]
 
 COPY entrypoint.sh /entrypoint.sh
 COPY server.py     /app/server.py
-RUN chmod +x /entrypoint.sh /usr/local/bin/nfqws2
+RUN chmod +x /entrypoint.sh /usr/local/bin/nfqws2 /usr/local/bin/deno
 
 ENV NFQUEUE_NUM=200 \
     SERVER_PORT=8080 \
     OUTPUT_DIR=/downloads \
+    DENO_NO_UPDATE_CHECK=1 \
     NFQWS2_OPT="--lua-desync=multidisorder:pos=1,midsld"
 
 ENTRYPOINT ["/entrypoint.sh"]

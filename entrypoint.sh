@@ -8,13 +8,14 @@ OUTPUT_DIR="${OUTPUT_DIR:-/downloads}"
 PID_FILE="/var/run/nfqws2.pid"
 
 cleanup() {
+    trap - EXIT INT TERM
     echo "[zapret2] Shutting down..."
     if [[ -f "$PID_FILE" ]]; then
         kill "$(cat "$PID_FILE")" 2>/dev/null || true
         rm -f "$PID_FILE"
     fi
-    iptables -t mangle -D OUTPUT -p tcp -m multiport --dports 80,443 -j NFQUEUE --queue-num "$QNUM" --queue-bypass 2>/dev/null || true
-    iptables -t mangle -D OUTPUT -p udp --dport 443 -j NFQUEUE --queue-num "$QNUM" --queue-bypass 2>/dev/null || true
+    iptables -t mangle -D OUTPUT -p tcp -m multiport --dports 80,443 -m mark ! --mark 0x40000000/0x40000000 -j NFQUEUE --queue-num "$QNUM" --queue-bypass 2>/dev/null || true
+    iptables -t mangle -D OUTPUT -p udp --dport 443 -m mark ! --mark 0x40000000/0x40000000 -j NFQUEUE --queue-num "$QNUM" --queue-bypass 2>/dev/null || true
     echo "[zapret2] Stopped."
 }
 trap cleanup EXIT INT TERM
@@ -23,8 +24,8 @@ trap cleanup EXIT INT TERM
 NFQUEUE_ACTIVE=0
 if iptables -t mangle -L OUTPUT >/dev/null 2>&1; then
     echo "[zapret2] Setting up iptables NFQUEUE rules (queue $QNUM)..."
-    iptables -t mangle -A OUTPUT -p tcp -m multiport --dports 80,443 -j NFQUEUE --queue-num "$QNUM" --queue-bypass
-    iptables -t mangle -A OUTPUT -p udp --dport 443 -j NFQUEUE --queue-num "$QNUM" --queue-bypass 2>/dev/null || true
+    iptables -t mangle -A OUTPUT -p tcp -m multiport --dports 80,443 -m mark ! --mark 0x40000000/0x40000000 -j NFQUEUE --queue-num "$QNUM" --queue-bypass
+    iptables -t mangle -A OUTPUT -p udp --dport 443 -m mark ! --mark 0x40000000/0x40000000 -j NFQUEUE --queue-num "$QNUM" --queue-bypass 2>/dev/null || true
 
     echo "[zapret2] Starting nfqws2 with options: ${NFQWS2_OPT:-default}..."
     # shellcheck disable=SC2086
