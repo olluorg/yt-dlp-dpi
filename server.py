@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """
-HTTP-сервер для скачивания видео через zapret DPI bypass.
+HTTP-сервер для скачивания видео через zapret DPI bypass с автоподбором стратегии.
 
 GET /                                        → HTML-форма
 GET /info?url=<URL>                          → JSON с метаданными видео
 GET /search?query=<query>                    → JSON с первым результатом поиска
 GET /download?url=<URL>&format=mp4|mp3       → скачать видео/аудио
              &start=HH:MM:SS&end=HH:MM:SS   → опциональная обрезка
+GET /strategy                                → JSON с текущей стратегией DPI
+GET /probe                                   → запуск подбора стратегии
 """
 
 import glob
@@ -30,10 +32,19 @@ HTML = """\
   <meta charset="utf-8">
   <title>Video Downloader</title>
   <style>
-    body { font-family: sans-serif; max-width: 600px; margin: 60px auto; }
-    input[type=text] { width: 100%; padding: 8px; font-size: 1em; box-sizing: border-box; }
-    select, button { padding: 8px 16px; font-size: 1em; margin-top: 8px; }
-    button { cursor: pointer; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; max-width: 600px; margin: 50px auto; padding: 0 16px; color: #222; }
+    h2 { margin-bottom: 20px; }
+    input[type=text] { width: 100%; padding: 10px; font-size: 1em; box-sizing: border-box; border: 1px solid #ccc; border-radius: 6px; }
+    select, button { padding: 10px 18px; font-size: 1em; margin-top: 10px; border-radius: 6px; }
+    button { background: #0066cc; color: #fff; border: none; cursor: pointer; }
+    button:hover { background: #0052a3; }
+    .status-card { margin-top: 30px; padding: 14px 18px; background: #f8f9fa; border: 1px solid #e2e8f0; border-radius: 8px; font-size: 0.9em; }
+    .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 0.8em; font-weight: bold; background: #28a745; color: white; }
+    .badge.off { background: #dc3545; }
+    .code { font-family: monospace; background: #eaecf0; padding: 2px 6px; border-radius: 4px; font-size: 0.85em; word-break: break-all; }
+    .actions { margin-top: 8px; }
+    .actions a { color: #0066cc; text-decoration: none; font-size: 0.9em; }
+    .actions a:hover { text-decoration: underline; }
   </style>
 </head>
 <body>
@@ -47,9 +58,69 @@ HTML = """\
     </select>
     <button type="submit">Скачать</button>
   </form>
+
+  <div class="status-card">
+    <div style="margin-bottom: 6px;">
+      <strong>DPI Bypass:</strong> <span class="badge" id="bypass-badge">Проверка...</span>
+    </div>
+    <div style="margin-bottom: 6px;">
+      <strong>Стратегия:</strong> <span class="code" id="strat-val">определяется...</span>
+    </div>
+    <div class="actions">
+      <a href="/probe">🔄 Подобрать стратегию заново</a>
+    </div>
+  </div>
+
+  <script>
+    fetch('/strategy')
+      .then(r => r.json())
+      .then(d => {
+        const badge = document.getElementById('bypass-badge');
+        badge.textContent = d.active ? 'Активен' : 'Отключен';
+        if (!d.active) badge.classList.add('off');
+        document.getElementById('strat-val').textContent = d.strategy || 'не выбрана';
+      })
+      .catch(() => {
+        document.getElementById('strat-val').textContent = 'auto';
+      });
+  </script>
 </body>
 </html>
 """
+
+
+def get_current_strategy() -> str:
+    cache_file = os.path.join(os.environ.get("OUTPUT_DIR", "/downloads"), ".zapret_strategy")
+    if os.path.isfile(cache_file):
+        try:
+            with open(cache_file, "r") as f:
+                content = f.read().strip()
+                if content:
+                    return content
+        except OSError:
+            pass
+    return os.environ.get("NFQWS2_OPT", "--lua-desync=multidisorder:pos=1,midsld")
+
+
+def is_nfqws_alive() -> bool:
+    pid_file = "/var/run/nfqws2.pid"
+    if os.path.isfile(pid_file):
+        try:
+            with open(pid_file, "r") as f:
+                pid = int(f.read().strip())
+            os.kill(pid, 0)
+            return True
+        except (OSError, ValueError):
+            return False
+    return False
+
+
+def trigger_probe(force=True) -> tuple[bool, str]:
+    if not os.path.isfile("/app/probe.sh"):
+        return False, "probe.sh not found"
+    env = dict(os.environ, FORCE_PROBE="1" if force else "0")
+    res = subprocess.run(["/app/probe.sh", "--auto"], env=env, capture_output=True, text=True)
+    return res.returncode == 0, res.stdout or res.stderr
 
 
 def yt_dlp_base_cmd():
@@ -76,6 +147,14 @@ class VideoHandler(http.server.BaseHTTPRequestHandler):
         if parsed.path == "/":
             logging.info("[%s] [%s] GET /", req_id, self.client_address[0])
             self._send_html(HTML)
+            return
+
+        if parsed.path == "/strategy":
+            self._handle_strategy()
+            return
+
+        if parsed.path == "/probe":
+            self._handle_probe(req_id, params)
             return
 
         if parsed.path == "/info":
@@ -107,6 +186,50 @@ class VideoHandler(http.server.BaseHTTPRequestHandler):
 
         self.send_error(404)
 
+    # ── /strategy & /probe ────────────────────────────────────────────────────
+
+    def _handle_strategy(self):
+        strat = get_current_strategy()
+        alive = is_nfqws_alive()
+        self._send_json({"strategy": strat, "active": alive})
+
+    def _handle_probe(self, req_id: str, params: dict):
+        client = self.client_address[0]
+        logging.info("[%s] [%s] triggering strategy probe", req_id, client)
+        ok, out = trigger_probe(force=True)
+        strat = get_current_strategy()
+
+        if "application/json" in self.headers.get("Accept", "") or params.get("format", [""])[0] == "json":
+            self._send_json({"success": ok, "strategy": strat, "output": out})
+        else:
+            status_text = "Успешно найдена рабочая стратегия" if ok else "Ошибка: не удалось найти рабочую стратегию"
+            status_color = "#28a745" if ok else "#dc3545"
+            body = f"""<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>Результат подбора стратегии</title>
+  <style>
+    body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; max-width: 650px; margin: 40px auto; padding: 0 16px; color: #222; }}
+    pre {{ background: #f4f6f8; padding: 14px; border-radius: 6px; overflow-x: auto; font-size: 0.9em; }}
+    .status {{ font-size: 1.1em; font-weight: bold; color: {status_color}; }}
+    .card {{ background: #fafafa; border: 1px solid #ddd; border-radius: 8px; padding: 16px; margin: 20px 0; }}
+    a {{ color: #0066cc; text-decoration: none; }}
+  </style>
+</head>
+<body>
+  <h2>Результат автоподбора стратегии DPI</h2>
+  <div class="card">
+    <p class="status">{status_text}</p>
+    <p><strong>Текущая стратегия:</strong> <code>{strat}</code></p>
+  </div>
+  <h3>Лог проверки:</h3>
+  <pre>{out}</pre>
+  <p><a href="/">← Вернуться на главную форму</a></p>
+</body>
+</html>"""
+            self._send_html(body)
+
     # ── /info ─────────────────────────────────────────────────────────────────
 
     def _handle_info(self, req_id: str, url: str):
@@ -119,6 +242,12 @@ class VideoHandler(http.server.BaseHTTPRequestHandler):
             url,
         ]
         result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0 and os.path.isfile("/app/probe.sh") and os.environ.get("AUTO_RETRY", "1") == "1":
+            logging.warning("[%s] [%s] info failed; re-probing DPI strategy...", req_id, client)
+            ok, _ = trigger_probe(force=True)
+            if ok:
+                result = subprocess.run(cmd, capture_output=True, text=True)
+
         if result.returncode != 0:
             logging.error("[%s] [%s] info failed url=%s", req_id, client, url)
             self.send_error(500, "Failed to fetch video info")
@@ -151,6 +280,12 @@ class VideoHandler(http.server.BaseHTTPRequestHandler):
             f"ytsearch1:{query}",
         ]
         result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0 and os.path.isfile("/app/probe.sh") and os.environ.get("AUTO_RETRY", "1") == "1":
+            logging.warning("[%s] [%s] search failed; re-probing DPI strategy...", req_id, client)
+            ok, _ = trigger_probe(force=True)
+            if ok:
+                result = subprocess.run(cmd, capture_output=True, text=True)
+
         if result.returncode != 0:
             logging.error("[%s] [%s] search failed query=%s", req_id, client, query)
             self.send_error(500, "Search failed")
@@ -194,6 +329,14 @@ class VideoHandler(http.server.BaseHTTPRequestHandler):
 
             logging.info("[%s] [%s] downloading url=%s", req_id, client, url)
             result = subprocess.run(cmd)
+
+            if result.returncode != 0 and os.path.isfile("/app/probe.sh") and os.environ.get("AUTO_RETRY", "1") == "1":
+                logging.warning("[%s] [%s] download failed; re-probing DPI strategy...", req_id, client)
+                ok, _ = trigger_probe(force=True)
+                if ok:
+                    logging.info("[%s] [%s] new strategy selected; retrying download...", req_id, client)
+                    result = subprocess.run(cmd)
+
             if result.returncode != 0:
                 logging.error("[%s] [%s] download failed url=%s", req_id, client, url)
                 self.send_error(500, "Download failed")

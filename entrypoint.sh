@@ -14,8 +14,8 @@ cleanup() {
         kill "$(cat "$PID_FILE")" 2>/dev/null || true
         rm -f "$PID_FILE"
     fi
-    iptables -t mangle -D OUTPUT -p tcp -m multiport --dports 80,443 -m mark ! --mark 0x40000000/0x40000000 -j NFQUEUE --queue-num "$QNUM" --queue-bypass 2>/dev/null || true
-    iptables -t mangle -D OUTPUT -p udp --dport 443 -m mark ! --mark 0x40000000/0x40000000 -j NFQUEUE --queue-num "$QNUM" --queue-bypass 2>/dev/null || true
+    iptables -t mangle -D OUTPUT -p tcp -m multiport --dports 80,443 -m mark ! --mark 0x40000000/0x40000000 -m connbytes --connbytes-dir=original --connbytes-mode=packets --connbytes 1:12 -j NFQUEUE --queue-num "$QNUM" --queue-bypass 2>/dev/null || true
+    iptables -t mangle -D OUTPUT -p udp --dport 443 -m mark ! --mark 0x40000000/0x40000000 -m connbytes --connbytes-dir=original --connbytes-mode=packets --connbytes 1:6 -j NFQUEUE --queue-num "$QNUM" --queue-bypass 2>/dev/null || true
     echo "[zapret2] Stopped."
 }
 trap cleanup EXIT INT TERM
@@ -24,24 +24,42 @@ trap cleanup EXIT INT TERM
 NFQUEUE_ACTIVE=0
 if iptables -t mangle -L OUTPUT >/dev/null 2>&1; then
     echo "[zapret2] Setting up iptables NFQUEUE rules (queue $QNUM)..."
-    iptables -t mangle -A OUTPUT -p tcp -m multiport --dports 80,443 -m mark ! --mark 0x40000000/0x40000000 -j NFQUEUE --queue-num "$QNUM" --queue-bypass
-    iptables -t mangle -A OUTPUT -p udp --dport 443 -m mark ! --mark 0x40000000/0x40000000 -j NFQUEUE --queue-num "$QNUM" --queue-bypass 2>/dev/null || true
+    iptables -t mangle -A OUTPUT -p tcp -m multiport --dports 80,443 -m mark ! --mark 0x40000000/0x40000000 -m connbytes --connbytes-dir=original --connbytes-mode=packets --connbytes 1:12 -j NFQUEUE --queue-num "$QNUM" --queue-bypass
+    iptables -t mangle -A OUTPUT -p udp --dport 443 -m mark ! --mark 0x40000000/0x40000000 -m connbytes --connbytes-dir=original --connbytes-mode=packets --connbytes 1:6 -j NFQUEUE --queue-num "$QNUM" --queue-bypass 2>/dev/null || true
 
-    echo "[zapret2] Starting nfqws2 with options: ${NFQWS2_OPT:-default}..."
-    # shellcheck disable=SC2086
-    nfqws2 \
-        --qnum="$QNUM" \
-        --daemon \
-        --user=root \
-        --pidfile="$PID_FILE" \
-        --lua-init=@/opt/zapret2/lua/zapret-lib.lua \
-        --lua-init=@/opt/zapret2/lua/zapret-antidpi.lua \
-        --blob=tls_google:@/opt/zapret2/fake/tls_clienthello_www_google_com.bin \
-        --filter-tcp=443 --filter-l7=tls \
-        --payload=tls_client_hello \
-        ${NFQWS2_OPT}
+    # ── Benchmark / probe CLI mode ────────────────────────────────────────────
+    if [[ "${1:-}" == "probe" || "${1:-}" == "--probe" ]]; then
+        exec /app/probe.sh --benchmark
+    fi
 
-    sleep 0.5
+    # ── Strategy selection ────────────────────────────────────────────────────
+    NFQWS2_OPT="${NFQWS2_OPT:-auto}"
+    AUTO_STRATEGY="${AUTO_STRATEGY:-0}"
+
+    if [[ "$NFQWS2_OPT" == "auto" || "$AUTO_STRATEGY" == "1" || -z "$NFQWS2_OPT" ]]; then
+        echo "[zapret2] Auto-selecting DPI bypass strategy..."
+        if [[ -f /app/probe.sh ]]; then
+            /app/probe.sh --auto || true
+        else
+            echo "[zapret2] WARNING: /app/probe.sh not found, falling back to default." >&2
+        fi
+    else
+        echo "[zapret2] Starting nfqws2 with custom options: ${NFQWS2_OPT}..."
+        # shellcheck disable=SC2086
+        nfqws2 \
+            --qnum="$QNUM" \
+            --daemon \
+            --user=root \
+            --pidfile="$PID_FILE" \
+            --lua-init=@/opt/zapret2/lua/zapret-lib.lua \
+            --lua-init=@/opt/zapret2/lua/zapret-antidpi.lua \
+            --blob=tls_google:@/opt/zapret2/fake/tls_clienthello_www_google_com.bin \
+            --filter-tcp=443 --filter-l7=tls \
+            --payload=tls_client_hello \
+            ${NFQWS2_OPT}
+    fi
+
+    sleep 0.3
     if [[ -f "$PID_FILE" ]] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
         NFQUEUE_ACTIVE=1
         echo "[zapret2] nfqws2 running (pid $(cat "$PID_FILE")). DPI bypass active!"
@@ -50,6 +68,10 @@ if iptables -t mangle -L OUTPUT >/dev/null 2>&1; then
     fi
 else
     echo "[zapret2] WARNING: iptables not available. Make sure to run container with --cap-add=NET_ADMIN (or --privileged)." >&2
+    if [[ "${1:-}" == "probe" || "${1:-}" == "--probe" ]]; then
+        echo "[zapret2] Cannot run probe without NET_ADMIN capability." >&2
+        exit 1
+    fi
 fi
 
 # ─── Mode selection ───────────────────────────────────────────────────────────

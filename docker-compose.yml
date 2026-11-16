@@ -14,7 +14,7 @@ services:
     environment:
       - NFQUEUE_NUM=200
       - SERVER_PORT=8080
-      - NFQWS2_OPT=--lua-desync=multidisorder:pos=1,midsld
+      - NFQWS2_OPT=auto
 
     volumes:
       - ./downloads:/downloads

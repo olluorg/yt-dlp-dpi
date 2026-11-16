@@ -22,11 +22,14 @@ docker compose up -d
 
 **Linux / WSL2 (Windows):**
 ```bash
-# Скачать видео (MP4)
+# Скачать видео (MP4) — стратегия подберется автоматически
 docker run --rm --cap-add=NET_ADMIN -v "${PWD}/downloads:/downloads" ghcr.io/olluorg/yt-dlp-dpi:latest "https://youtu.be/aqz-KE-bpKQ"
 
 # Скачать аудио (MP3)
 docker run --rm --cap-add=NET_ADMIN -v "${PWD}/downloads:/downloads" -e YT_DLP_OPTS="-x --audio-format mp3" ghcr.io/olluorg/yt-dlp-dpi:latest "https://youtu.be/aqz-KE-bpKQ"
+
+# Бенчмарк: протестировать все стратегии и замерить задержку
+docker run --rm --cap-add=NET_ADMIN ghcr.io/olluorg/yt-dlp-dpi:latest probe
 ```
 
 **macOS / Зарубежные серверы (без DPI bypass):**
@@ -73,8 +76,18 @@ docker build -t yt-dlp-dpi .
 
 ---
 
+### `GET /strategy`
+Возвращает информацию о текущей стратегии и статусе DPI bypass (JSON).
+
+---
+
+### `GET /probe`
+Принудительно запускает переподбор стратегии через пул пресетов и переключает демон `nfqws2`.
+
+---
+
 ### `GET /download`
-Скачивает видео или аудио и отдаёт файл напрямую в ответе.
+Скачивает видео или аудио и отдаёт файл напрямую в ответе. При сбое сети сервер автоматически пробует переподобрать рабочую стратегию и повторить загрузку.
 
 | Параметр | Обязательный | Значения | По умолчанию | Описание |
 |---|---|---|---|---|
@@ -89,8 +102,12 @@ docker build -t yt-dlp-dpi .
 |---|---|---|
 | `SERVER_PORT` | `8080` | Порт веб-интерфейса |
 | `NFQUEUE_NUM` | `200` | Номер очереди NFQUEUE |
-| `NFQWS2_OPT` | `--lua-desync=multidisorder:pos=1,midsld` | Параметры десинхронизации zapret2 |
-| `OUTPUT_DIR` | `/downloads` | Папка для сохранения файлов |
+| `NFQWS2_OPT` | `auto` | Параметры десинхронизации zapret2 (`auto` для автоподбора или кастомная строка) |
+| `AUTO_STRATEGY` | `1` | `1` — включить автоподбор при старте |
+| `FORCE_PROBE` | `0` | `1` — игнорировать кэш стратегии и протестировать пул заново |
+| `AUTO_RETRY` | `1` | `1` — автоподбор и повтор при ошибках загрузки в веб-сервере |
+| `EXTRA_STRATEGIES` | — | Дополнительные стратегии для проверки (разделитель `;`) |
+| `OUTPUT_DIR` | `/downloads` | Папка для сохранения файлов и кэша `.zapret_strategy` |
 | `COOKIES_FILE` | `/cookies.txt` | Путь к файлу cookies внутри контейнера |
 | `YT_DLP_OPTS` | — | Дополнительные флаги yt-dlp |
 

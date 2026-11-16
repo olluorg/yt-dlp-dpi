@@ -19,11 +19,14 @@ Open in browser: `http://localhost:8080`
 ### Command Line
 
 ```bash
-# Download video (MP4)
+# Download video (MP4) — strategy is auto-selected
 docker run --rm --cap-add=NET_ADMIN -v "${PWD}/downloads:/downloads" ghcr.io/olluorg/yt-dlp-dpi:latest "https://youtu.be/aqz-KE-bpKQ"
 
 # Download audio (MP3)
 docker run --rm --cap-add=NET_ADMIN -v "${PWD}/downloads:/downloads" -e YT_DLP_OPTS="-x --audio-format mp3" ghcr.io/olluorg/yt-dlp-dpi:latest "https://youtu.be/aqz-KE-bpKQ"
+
+# Benchmark all strategies and test latency
+docker run --rm --cap-add=NET_ADMIN ghcr.io/olluorg/yt-dlp-dpi:latest probe
 ```
 
 Files are saved to `./downloads/`.

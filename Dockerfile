@@ -72,13 +72,15 @@ WORKDIR /downloads
 VOLUME ["/downloads"]
 
 COPY entrypoint.sh /entrypoint.sh
+COPY probe.sh      /app/probe.sh
 COPY server.py     /app/server.py
-RUN chmod +x /entrypoint.sh /usr/local/bin/nfqws2 /usr/local/bin/deno
+RUN chmod +x /entrypoint.sh /app/probe.sh /usr/local/bin/nfqws2 /usr/local/bin/deno
 
 ENV NFQUEUE_NUM=200 \
     SERVER_PORT=8080 \
     OUTPUT_DIR=/downloads \
     DENO_NO_UPDATE_CHECK=1 \
-    NFQWS2_OPT="--lua-desync=multidisorder:pos=1,midsld"
+    AUTO_STRATEGY=1 \
+    NFQWS2_OPT="auto"
 
 ENTRYPOINT ["/entrypoint.sh"]
